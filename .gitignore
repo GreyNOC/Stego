@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+
+build/
+build_*/
+dist/
+dist_*/
+installer_release/
+
+*.exe
+*.tmp
+*.log
+stego_debug.log
