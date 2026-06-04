@@ -46,10 +46,12 @@ def asset_path(file_name: str) -> Path:
 
 
 class AnimatedGlobe(tk.Label):
-    def __init__(self, parent: tk.Misc, size: int = 88, frame_ms: int = 70) -> None:
+    def __init__(self, parent: tk.Misc, size: int = 112, frame_ms: int = 55) -> None:
         super().__init__(parent, bg=APP_BACKGROUND, bd=0, highlightthickness=0)
         self.size = size
         self.frame_ms = frame_ms
+        self.render_scale = 3
+        self.render_size = self.size * self.render_scale
         self.angle = 0
         self.after_id: str | None = None
         self.photo_image: ImageTk.PhotoImage | None = None
@@ -58,15 +60,20 @@ class AnimatedGlobe(tk.Label):
         self._animate()
 
     def _load_base_image(self) -> Image.Image | None:
-        try:
-            with Image.open(asset_path("greynoc_globe_256.png")) as source:
-                image = source.convert("RGBA")
-        except Exception:
+        image = None
+        for file_name in ("greynoc_globe_1024.png", "greynoc_globe_256.png"):
+            try:
+                with Image.open(asset_path(file_name)) as source:
+                    image = source.convert("RGBA")
+                break
+            except Exception:
+                continue
+        if image is None:
             return None
 
-        image.thumbnail((self.size, self.size), Image.Resampling.LANCZOS)
-        canvas = Image.new("RGBA", (self.size, self.size), (0, 0, 0, 0))
-        canvas.alpha_composite(image, ((self.size - image.width) // 2, (self.size - image.height) // 2))
+        image.thumbnail((self.render_size, self.render_size), Image.Resampling.LANCZOS)
+        canvas = Image.new("RGBA", (self.render_size, self.render_size), (0, 0, 0, 0))
+        canvas.alpha_composite(image, ((self.render_size - image.width) // 2, (self.render_size - image.height) // 2))
         return canvas
 
     def _animate(self) -> None:
@@ -74,11 +81,12 @@ class AnimatedGlobe(tk.Label):
             return
 
         rotated = self.base_image.rotate(self.angle, resample=Image.Resampling.BICUBIC)
-        frame = Image.new("RGBA", (self.size, self.size), APP_BACKGROUND_RGBA)
-        frame.alpha_composite(rotated)
+        high_res_frame = Image.new("RGBA", (self.render_size, self.render_size), APP_BACKGROUND_RGBA)
+        high_res_frame.alpha_composite(rotated)
+        frame = high_res_frame.resize((self.size, self.size), Image.Resampling.LANCZOS)
         self.photo_image = ImageTk.PhotoImage(frame)
         self.configure(image=self.photo_image)
-        self.angle = (self.angle + 3) % 360
+        self.angle = (self.angle + 2) % 360
         self.after_id = self.after(self.frame_ms, self._animate)
 
     def _stop_animation(self, _event: tk.Event) -> None:
@@ -102,6 +110,8 @@ class StegoStudioApp(tk.Tk):
         self.app_icon_image: tk.PhotoImage | None = None
         self.window_bar_icon_image: ImageTk.PhotoImage | None = None
         self.brand_logo_image: ImageTk.PhotoImage | None = None
+        self.splash_globe_image: ImageTk.PhotoImage | None = None
+        self.splash_window: tk.Toplevel | None = None
         self.extract_preview_image: ImageTk.PhotoImage | None = None
         self.inject_preview_image: ImageTk.PhotoImage | None = None
         self.extract_path: Path | None = None
@@ -145,8 +155,11 @@ class StegoStudioApp(tk.Tk):
         self.style.configure("TEntry", fieldbackground="#08111f", foreground="#eef7ff", insertcolor="#eef7ff")
 
         self.configure_window_icon()
+        self.withdraw()
+        self.show_splash()
         self.configure_frameless_window()
         self._build_ui()
+        self.after(1100, self.close_splash)
 
         if len(sys.argv) > 1:
             start_path = Path(sys.argv[1])
@@ -178,7 +191,7 @@ class StegoStudioApp(tk.Tk):
             style="Muted.TLabel",
         ).pack(anchor="w", pady=(4, 0))
 
-        AnimatedGlobe(header, size=90).pack(side="right", padx=(18, 0))
+        AnimatedGlobe(header, size=112).pack(side="right", padx=(18, 0))
 
         notebook = ttk.Notebook(root)
         notebook.pack(fill=BOTH, expand=True, pady=(22, 0))
@@ -187,6 +200,54 @@ class StegoStudioApp(tk.Tk):
         notebook.add(self._build_inject_tab(notebook), text="Inject")
 
         self.build_resize_grip(shell)
+
+    def show_splash(self) -> None:
+        splash = tk.Toplevel(self)
+        splash.overrideredirect(True)
+        splash.configure(bg=APP_BACKGROUND)
+        splash.attributes("-topmost", True)
+
+        width = 430
+        height = 360
+        x = self.winfo_screenwidth() // 2 - width // 2
+        y = self.winfo_screenheight() // 2 - height // 2
+        splash.geometry(f"{width}x{height}+{x}+{y}")
+
+        frame = tk.Frame(splash, bg=APP_BACKGROUND, bd=0, highlightthickness=1, highlightbackground="#1d9fff")
+        frame.pack(fill=BOTH, expand=True)
+
+        self.splash_globe_image = self.load_photo_asset("greynoc_globe_1024.png", 190)
+        if self.splash_globe_image is None:
+            self.splash_globe_image = self.load_photo_asset("greynoc_globe_256.png", 190)
+        if self.splash_globe_image is not None:
+            tk.Label(frame, image=self.splash_globe_image, bg=APP_BACKGROUND, bd=0).pack(pady=(34, 14))
+
+        tk.Label(
+            frame,
+            text="GreyNOC Stego Studio",
+            bg=APP_BACKGROUND,
+            fg="#eef7ff",
+            font=("Segoe UI", 22, "bold"),
+        ).pack()
+        tk.Label(
+            frame,
+            text="Secure media payload tools",
+            bg=APP_BACKGROUND,
+            fg="#7bdfff",
+            font=("Segoe UI", 10, "bold"),
+        ).pack(pady=(7, 0))
+
+        self.splash_window = splash
+
+    def close_splash(self) -> None:
+        if self.splash_window is not None:
+            try:
+                self.splash_window.destroy()
+            except tk.TclError:
+                pass
+            self.splash_window = None
+        self.deiconify()
+        self.lift()
 
     def _build_extract_tab(self, parent: ttk.Notebook) -> ttk.Frame:
         tab = ttk.Frame(parent, style="Root.TFrame", padding=(0, 18, 0, 0))
