@@ -4,6 +4,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+import os
 import traceback
 import zlib
 from pathlib import Path
@@ -12,7 +13,7 @@ from Crypto.Cipher import AES
 from Crypto.Hash import SHA256
 from Crypto.Protocol.KDF import PBKDF2
 from Crypto.Random import get_random_bytes
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 from stego_constants import (
     AES_GCM_NONCE_SIZE,
@@ -30,6 +31,10 @@ from stego_constants import (
     TEXT_ARMOR_PREFIX,
     TRAILER_LENGTH_SIZE,
 )
+
+# Bind Pillow's decompression-bomb limit to the project pixel cap so oversized
+# images are rejected during decode rather than after a partial raster load.
+Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
 
 
 def format_bytes(value: int) -> str:
@@ -63,6 +68,26 @@ def validate_image_limits(image: Image.Image) -> None:
     pixels = image.width * image.height
     if pixels > MAX_IMAGE_PIXELS:
         raise ValueError(f"Image is too large ({pixels:,} pixels). Limit is {MAX_IMAGE_PIXELS:,} pixels.")
+
+
+def open_image_safely(path: Path) -> Image.Image:
+    """Open an image with bounded size and clean errors.
+
+    Returns a detached copy so the caller can close the source handle safely.
+    Raises ValueError for unidentified, corrupted, or oversized images.
+    """
+    try:
+        with Image.open(path) as source:
+            source.load()
+            return source.copy()
+    except UnidentifiedImageError as exc:
+        raise ValueError("Invalid or unsupported image file.") from exc
+    except Image.DecompressionBombError as exc:
+        raise ValueError(
+            f"Image exceeds the {MAX_IMAGE_PIXELS:,}-pixel safety limit."
+        ) from exc
+    except OSError as exc:
+        raise ValueError("Image file is corrupted or unreadable.") from exc
 
 
 def bytes_to_bits(data: bytes) -> list[int]:
@@ -304,7 +329,13 @@ def decrypt_text_input(value: str, password: str) -> tuple[str, str]:
     return format_payload(payload)
 
 
+def _debug_logging_enabled() -> bool:
+    return os.environ.get("GREYNOC_DEBUG", "").strip() not in ("", "0", "false", "False")
+
+
 def log_exception() -> None:
+    if not _debug_logging_enabled():
+        return
     try:
         with DEBUG_LOG.open("a", encoding="utf-8") as log:
             log.write("\n--- GreyNOC Stego Studio error ---\n")
@@ -314,6 +345,8 @@ def log_exception() -> None:
 
 
 def log_traceback_text(traceback_text: str) -> None:
+    if not _debug_logging_enabled():
+        return
     try:
         with DEBUG_LOG.open("a", encoding="utf-8") as log:
             log.write("\n--- GreyNOC Stego Studio error ---\n")

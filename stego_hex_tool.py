@@ -4,12 +4,31 @@ import argparse
 import zlib
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 
 MAGIC = b"GNOCSTEG1"
 HEADER_SIZE = len(MAGIC) + 4
 CRC_SIZE = 4
+MAX_IMAGE_PIXELS = 50_000_000
+
+# Bind Pillow's decompression-bomb cap when this script is imported or run directly.
+Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
+
+
+def _open_image(path: Path) -> Image.Image:
+    try:
+        with Image.open(path) as source:
+            source.load()
+            return source.copy()
+    except UnidentifiedImageError as exc:
+        raise ValueError("Invalid or unsupported image file.") from exc
+    except Image.DecompressionBombError as exc:
+        raise ValueError(
+            f"Image exceeds the {MAX_IMAGE_PIXELS:,}-pixel safety limit."
+        ) from exc
+    except OSError as exc:
+        raise ValueError("Image file is corrupted or unreadable.") from exc
 
 
 def _bytes_to_bits(data: bytes) -> list[int]:
@@ -63,8 +82,7 @@ def embed_hex(input_path: Path, output_path: Path, hex_string: str) -> None:
     )
     bits = _bytes_to_bits(packet)
 
-    with Image.open(input_path) as source:
-        image = _normalise_image(source)
+    image = _normalise_image(_open_image(input_path))
 
     channel_count = len(image.getbands())
     capacity = image.width * image.height * 3
@@ -81,8 +99,7 @@ def embed_hex(input_path: Path, output_path: Path, hex_string: str) -> None:
 
 
 def extract_hex(input_path: Path) -> tuple[str, str]:
-    with Image.open(input_path) as source:
-        image = _normalise_image(source)
+    image = _normalise_image(_open_image(input_path))
 
     channel_count = len(image.getbands())
     raw = image.tobytes()

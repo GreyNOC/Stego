@@ -28,6 +28,7 @@ from stego_core import (
     decrypt_text_input,
     log_exception,
     log_traceback_text,
+    open_image_safely,
     parse_hex,
     validate_image_limits,
     validate_payload_size,
@@ -737,10 +738,10 @@ class StegoStudioApp(tk.Tk):
                 self.set_placeholder(label, slot, f"Video selected\n\n{file_path.name}")
                 return
         else:
-            with Image.open(file_path) as image:
-                validate_image_limits(image)
-                image.thumbnail((360, 360), Image.Resampling.LANCZOS)
-                preview = image.convert("RGBA")
+            image = open_image_safely(file_path)
+            validate_image_limits(image)
+            image.thumbnail((360, 360), Image.Resampling.LANCZOS)
+            preview = image.convert("RGBA")
 
         photo_image = ImageTk.PhotoImage(preview)
         if slot == "extract":
