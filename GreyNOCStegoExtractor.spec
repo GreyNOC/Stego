@@ -8,6 +8,7 @@ a = Analysis(
     datas=[
         ('assets/greynoc_app_icon.png', 'assets'),
         ('assets/greynoc_brand.png', 'assets'),
+        ('assets/greynoc_globe_1024.png', 'assets'),
         ('assets/greynoc_globe_256.png', 'assets'),
     ],
     hiddenimports=[],

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -90,6 +92,90 @@ class StegoRegressionTests(unittest.TestCase):
         raw_hex = (salt + nonce + encrypted_payload).hex()
 
         self.assertEqual(decrypt_text_input(raw_hex, PASSWORD)[1], PAYLOAD.decode())
+
+    def test_linux_cli_round_trips_payloads(self) -> None:
+        repo_root = Path(__file__).resolve().parent
+        cli = repo_root / "greynoc_stego_cli.py"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "source.png"
+            output = root / "encoded.png"
+            self.make_source_image(source)
+
+            inject = subprocess.run(
+                [
+                    sys.executable,
+                    str(cli),
+                    "inject",
+                    str(source),
+                    "--output",
+                    str(output),
+                    "--password",
+                    PASSWORD,
+                    "--text",
+                    PAYLOAD.decode(),
+                ],
+                cwd=repo_root,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            self.assertIn("Wrote:", inject.stdout)
+            self.assertTrue(output.exists())
+
+            extract = subprocess.run(
+                [
+                    sys.executable,
+                    str(cli),
+                    "extract",
+                    str(output),
+                    "--password",
+                    PASSWORD,
+                    "--format",
+                    "text",
+                ],
+                cwd=repo_root,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            self.assertIn(PAYLOAD.decode(), extract.stdout)
+
+            encrypted = subprocess.run(
+                [
+                    sys.executable,
+                    str(cli),
+                    "encrypt-text",
+                    "--password",
+                    PASSWORD,
+                    "--text",
+                    PAYLOAD.decode(),
+                ],
+                cwd=repo_root,
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout.strip()
+            self.assertTrue(encrypted.startswith("GNOCENC1:"))
+
+            decrypted = subprocess.run(
+                [
+                    sys.executable,
+                    str(cli),
+                    "decrypt-text",
+                    encrypted,
+                    "--password",
+                    PASSWORD,
+                    "--format",
+                    "text",
+                ],
+                cwd=repo_root,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            self.assertIn(PAYLOAD.decode(), decrypted.stdout)
 
 
 if __name__ == "__main__":
