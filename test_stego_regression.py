@@ -5,12 +5,20 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from PIL import Image
 
+import stego_core
 from stego_carriers import embed_for_file, extract_from_file, normalized_output_path
 from stego_constants import MAX_PAYLOAD_BYTES
-from stego_core import decrypt_text_input, encrypt_payload_to_text, parse_encrypted_text, validate_payload_size
+from stego_core import (
+    decrypt_text_input,
+    encrypt_payload_to_text,
+    open_image_safely,
+    parse_encrypted_text,
+    validate_payload_size,
+)
 
 
 PAYLOAD = b"Save the Humans."
@@ -92,6 +100,99 @@ class StegoRegressionTests(unittest.TestCase):
         raw_hex = (salt + nonce + encrypted_payload).hex()
 
         self.assertEqual(decrypt_text_input(raw_hex, PASSWORD)[1], PAYLOAD.decode())
+
+    def test_corrupted_image_fails_with_clean_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            corrupted = Path(temp_dir) / "corrupted.png"
+            corrupted.write_bytes(b"\x89PNG\r\n\x1a\nthis is not a real PNG payload")
+
+            with self.assertRaises(ValueError) as ctx:
+                open_image_safely(corrupted)
+            self.assertNotIn("Traceback", str(ctx.exception))
+
+            with self.assertRaises(ValueError):
+                extract_from_file(corrupted, PASSWORD)
+
+    def test_unsupported_binary_fails_cleanly(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            blob = Path(temp_dir) / "random.bin"
+            blob.write_bytes(b"\x00\x01\x02\x03not an image and no trailer either")
+
+            with self.assertRaises(ValueError):
+                extract_from_file(blob)
+
+    def test_tampered_image_ciphertext_fails_authentication(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "source.png"
+            output = root / "encoded.png"
+            self.make_source_image(source)
+            embed_for_file(source, output, PAYLOAD, PASSWORD)
+
+            data = bytearray(output.read_bytes())
+            # Flip a bit deep in the file body so the GCM tag check fails.
+            flip_index = len(data) - 1024
+            data[flip_index] ^= 0x01
+            output.write_bytes(bytes(data))
+
+            with self.assertRaises(ValueError):
+                extract_from_file(output, PASSWORD)
+
+    def test_tampered_encrypted_text_fails_authentication(self) -> None:
+        encrypted_text = encrypt_payload_to_text(PAYLOAD, PASSWORD)
+        prefix, body = encrypted_text.split(":", 1)
+        # Swap two characters in the armored body to corrupt the ciphertext + tag.
+        tampered_body = body[:-3] + ("A" if body[-3] != "A" else "B") + body[-2:]
+        tampered = f"{prefix}:{tampered_body}"
+
+        with self.assertRaises(ValueError):
+            decrypt_text_input(tampered, PASSWORD)
+
+    def test_oversized_image_rejected_by_pillow_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            image_path = root / "tiny.png"
+            self.make_source_image(image_path)
+
+            # Lower the cap below the test image so Pillow's decompression-bomb
+            # guard fires during decode rather than after a partial load.
+            with mock.patch.object(Image, "MAX_IMAGE_PIXELS", 16), \
+                 mock.patch.object(stego_core, "MAX_IMAGE_PIXELS", 16):
+                with self.assertRaises(ValueError) as ctx:
+                    open_image_safely(image_path)
+                self.assertIn("safety limit", str(ctx.exception))
+
+    def test_debug_logging_is_off_by_default(self) -> None:
+        import os
+
+        log_path = stego_core.DEBUG_LOG
+        size_before = log_path.stat().st_size if log_path.exists() else 0
+
+        env = {k: v for k, v in os.environ.items() if k != "GREYNOC_DEBUG"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            try:
+                raise ValueError("synthetic error for logging test")
+            except ValueError:
+                stego_core.log_exception()
+
+        size_after = log_path.stat().st_size if log_path.exists() else 0
+        self.assertEqual(size_after, size_before)
+
+    def test_debug_logging_writes_when_env_flag_set(self) -> None:
+        import os
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            redirected = Path(temp_dir) / "stego_debug.log"
+            env = {**{k: v for k, v in os.environ.items()}, "GREYNOC_DEBUG": "1"}
+            with mock.patch.dict(os.environ, env, clear=True), \
+                 mock.patch.object(stego_core, "DEBUG_LOG", redirected):
+                try:
+                    raise ValueError("synthetic error for logging test")
+                except ValueError:
+                    stego_core.log_exception()
+
+            self.assertTrue(redirected.exists())
+            self.assertGreater(redirected.stat().st_size, 0)
 
     def test_linux_cli_round_trips_payloads(self) -> None:
         repo_root = Path(__file__).resolve().parent

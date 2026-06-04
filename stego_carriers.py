@@ -39,6 +39,7 @@ from stego_core import (
     format_bytes,
     format_payload,
     normalise_image,
+    open_image_safely,
     parse_protected_image_header,
     random_positions,
     read_bits,
@@ -105,9 +106,9 @@ def normalized_output_path(input_path: Path, requested_output_path: Path) -> Pat
 
 def extract_protected_image_payload(image_path: Path, password: str) -> tuple[str, str]:
     validate_source_file(image_path)
-    with Image.open(image_path) as source:
-        image = normalise_image(source)
-        validate_image_limits(image)
+    source = open_image_safely(image_path)
+    image = normalise_image(source)
+    validate_image_limits(image)
 
     channel_count = len(image.getbands())
     raw = image.tobytes()
@@ -134,9 +135,9 @@ def extract_protected_image_payload(image_path: Path, password: str) -> tuple[st
 
 def extract_legacy_image_payload(image_path: Path) -> tuple[str, str]:
     validate_source_file(image_path)
-    with Image.open(image_path) as source:
-        image = normalise_image(source)
-        validate_image_limits(image)
+    source = open_image_safely(image_path)
+    image = normalise_image(source)
+    validate_image_limits(image)
 
     channel_count = len(image.getbands())
     raw = image.tobytes()
@@ -247,9 +248,9 @@ def embed_legacy_image_payload(input_path: Path, output_path: Path, payload: byt
     packet = build_legacy_image_packet(payload)
     bits = bytes_to_bits(packet)
 
-    with Image.open(input_path) as source:
-        image = normalise_image(source)
-        validate_image_limits(image)
+    source = open_image_safely(input_path)
+    image = normalise_image(source)
+    validate_image_limits(image)
 
     channel_count = len(image.getbands())
     capacity = image.width * image.height * 3
@@ -287,9 +288,9 @@ def embed_protected_image_payload(
     header_bits = bytes_to_bits(header)
     encrypted_bits = bytes_to_bits(encrypted_payload)
 
-    with Image.open(input_path) as source:
-        image = normalise_image(source)
-        validate_image_limits(image)
+    source = open_image_safely(input_path)
+    image = normalise_image(source)
+    validate_image_limits(image)
 
     channel_count = len(image.getbands())
     capacity = image.width * image.height * 3

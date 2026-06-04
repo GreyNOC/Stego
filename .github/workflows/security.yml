@@ -1,0 +1,49 @@
+name: security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit-and-build:
+    name: pip-audit and compile
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install pip-audit
+        run: pip install pip-audit==2.7.3
+
+      - name: pip-audit (fail on vulnerable packages)
+        run: pip-audit --strict --progress-spinner off
+
+      - name: Byte-compile project
+        run: python -m compileall -q .
+
+      - name: Run unit tests
+        run: python -m unittest discover -v -s . -p "test_*.py"
