@@ -69,38 +69,75 @@ def cmd_decrypt_text(args: argparse.Namespace) -> int:
     return 0
 
 
+_PASSWORD_VISIBILITY_EPILOG = (
+    "WARNING: passwords passed via --password are visible to other users on "
+    "the host through process listings (e.g. `ps auxe`, `/proc/<pid>/cmdline`). "
+    "Omit --password to be prompted interactively via getpass."
+)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="greynoc-stego",
         description="GreyNOC Stego command-line tools for Linux and other shells.",
+        epilog=_PASSWORD_VISIBILITY_EPILOG,
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    inject_parser = subparsers.add_parser("inject", help="Hide a payload in an image, PDF, video, or file.")
+    inject_parser = subparsers.add_parser(
+        "inject",
+        help="Hide a payload in an image, PDF, video, or file.",
+        epilog=_PASSWORD_VISIBILITY_EPILOG,
+    )
     inject_parser.add_argument("input", type=Path, help="Carrier file to encode.")
     inject_parser.add_argument("-o", "--output", type=Path, help="Output path. Defaults beside the input file.")
-    inject_parser.add_argument("--password", help="Password for protected payloads. Empty means legacy unprotected.")
+    inject_parser.add_argument(
+        "--password",
+        help="Password for protected payloads. Empty means legacy unprotected. "
+             "Omit to be prompted interactively (recommended on shared hosts).",
+    )
     inject_parser.add_argument("--text", help="UTF-8 text payload.")
     inject_parser.add_argument("--hex", help="Hex payload.")
     inject_parser.add_argument("--file", type=Path, help="File whose bytes become the payload.")
     inject_parser.set_defaults(func=cmd_inject)
 
-    extract_parser = subparsers.add_parser("extract", help="Extract a payload from a carrier file.")
+    extract_parser = subparsers.add_parser(
+        "extract",
+        help="Extract a payload from a carrier file.",
+        epilog=_PASSWORD_VISIBILITY_EPILOG,
+    )
     extract_parser.add_argument("input", type=Path, help="Encoded carrier file.")
-    extract_parser.add_argument("--password", help="Password for protected payloads.")
+    extract_parser.add_argument(
+        "--password",
+        help="Password for protected payloads. Omit to be prompted interactively.",
+    )
     extract_parser.add_argument("--format", choices=("text", "hex", "both"), default="both")
     extract_parser.set_defaults(func=cmd_extract)
 
-    encrypt_parser = subparsers.add_parser("encrypt-text", help="Create a GreyNOC encrypted text container.")
-    encrypt_parser.add_argument("--password", help="Password for the encrypted text.")
+    encrypt_parser = subparsers.add_parser(
+        "encrypt-text",
+        help="Create a GreyNOC encrypted text container.",
+        epilog=_PASSWORD_VISIBILITY_EPILOG,
+    )
+    encrypt_parser.add_argument(
+        "--password",
+        help="Password for the encrypted text. Omit to be prompted interactively.",
+    )
     encrypt_parser.add_argument("--text", help="UTF-8 text payload.")
     encrypt_parser.add_argument("--hex", help="Hex payload.")
     encrypt_parser.add_argument("--file", type=Path, help="File whose bytes become the payload.")
     encrypt_parser.set_defaults(func=cmd_encrypt_text)
 
-    decrypt_parser = subparsers.add_parser("decrypt-text", help="Decrypt a GreyNOC encrypted text container.")
+    decrypt_parser = subparsers.add_parser(
+        "decrypt-text",
+        help="Decrypt a GreyNOC encrypted text container.",
+        epilog=_PASSWORD_VISIBILITY_EPILOG,
+    )
     decrypt_parser.add_argument("value", help="GreyNOC text, base64, or hex encrypted container.")
-    decrypt_parser.add_argument("--password", help="Password for the encrypted text.")
+    decrypt_parser.add_argument(
+        "--password",
+        help="Password for the encrypted text. Omit to be prompted interactively.",
+    )
     decrypt_parser.add_argument("--format", choices=("text", "hex", "both"), default="both")
     decrypt_parser.set_defaults(func=cmd_decrypt_text)
 

@@ -244,6 +244,8 @@ def extract_legacy_trailer_payload(file_path: Path) -> tuple[str, str]:
 def embed_legacy_image_payload(input_path: Path, output_path: Path, payload: bytes) -> None:
     validate_payload_size(payload)
     validate_source_file(input_path)
+    if input_path.resolve() == output_path.resolve():
+        raise ValueError("Choose a new output file so the source image is not overwritten.")
 
     packet = build_legacy_image_packet(payload)
     bits = bytes_to_bits(packet)
@@ -279,6 +281,8 @@ def embed_protected_image_payload(
 ) -> None:
     validate_payload_size(payload)
     validate_source_file(input_path)
+    if input_path.resolve() == output_path.resolve():
+        raise ValueError("Choose a new output file so the source image is not overwritten.")
 
     salt = get_random_bytes(SALT_SIZE)
     nonce = get_random_bytes(AES_GCM_NONCE_SIZE)

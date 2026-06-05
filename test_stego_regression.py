@@ -178,6 +178,59 @@ class StegoRegressionTests(unittest.TestCase):
         size_after = log_path.stat().st_size if log_path.exists() else 0
         self.assertEqual(size_after, size_before)
 
+    def test_image_embed_rejects_input_equals_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "source.png"
+            self.make_source_image(source)
+
+            # Protected path
+            with self.assertRaises(ValueError) as ctx:
+                embed_for_file(source, source, PAYLOAD, PASSWORD)
+            self.assertIn("overwritten", str(ctx.exception))
+
+            # Legacy unprotected path
+            with self.assertRaises(ValueError) as ctx:
+                embed_for_file(source, source, PAYLOAD, "")
+            self.assertIn("overwritten", str(ctx.exception))
+
+            # Original still intact (no partial write)
+            with Image.open(source) as image:
+                self.assertEqual(image.size, (96, 96))
+
+    def test_debug_logging_off_for_uppercase_false(self) -> None:
+        """Regression: GREYNOC_DEBUG=FALSE previously enabled logging due to blacklist logic."""
+        import os
+
+        log_path = stego_core.DEBUG_LOG
+        size_before = log_path.stat().st_size if log_path.exists() else 0
+
+        for value in ("FALSE", "False", "off", "no", "anything-else", "0", ""):
+            env = {**{k: v for k, v in os.environ.items()}, "GREYNOC_DEBUG": value}
+            with mock.patch.dict(os.environ, env, clear=True):
+                try:
+                    raise ValueError("synthetic")
+                except ValueError:
+                    stego_core.log_exception()
+
+        size_after = log_path.stat().st_size if log_path.exists() else 0
+        self.assertEqual(size_after, size_before, "log was written for a non-truthy GREYNOC_DEBUG value")
+
+    def test_debug_logging_on_for_truthy_values(self) -> None:
+        import os
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            for value in ("1", "true", "TRUE", "yes", "Yes", "on", "ON"):
+                redirected = Path(temp_dir) / f"log_{value}.log"
+                env = {**{k: v for k, v in os.environ.items()}, "GREYNOC_DEBUG": value}
+                with mock.patch.dict(os.environ, env, clear=True), \
+                     mock.patch.object(stego_core, "DEBUG_LOG", redirected):
+                    try:
+                        raise ValueError("synthetic")
+                    except ValueError:
+                        stego_core.log_exception()
+                self.assertTrue(redirected.exists(), f"log not written for GREYNOC_DEBUG={value!r}")
+                self.assertGreater(redirected.stat().st_size, 0)
+
     def test_debug_logging_writes_when_env_flag_set(self) -> None:
         import os
 
