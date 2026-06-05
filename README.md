@@ -80,7 +80,8 @@ CI also runs `pip-audit` and `python -m compileall .` on every push and pull req
 ## Security notes
 
 - **Passwords are never logged.** Status messages report only payload byte counts and operation modes, never the password or plaintext.
-- **Debug logging is opt-in.** The desktop app no longer writes `stego_debug.log` by default. Set `GREYNOC_DEBUG=1` in the environment if you need to capture tracebacks for a bug report — then delete the log when done.
+- **`--password` on the CLI is visible to other users on the host** via process listings (`ps auxe`, `/proc/<pid>/cmdline`, Windows Task Manager command-line column). On shared hosts, omit `--password` and let the CLI prompt you with `getpass` instead. The desktop app reads passwords from a masked `Entry` field, so it is not subject to this exposure.
+- **Debug logging is opt-in.** The desktop app no longer writes `stego_debug.log` by default. Set `GREYNOC_DEBUG=1` (or `true`, `yes`, `on`) in the environment if you need to capture tracebacks for a bug report — then delete the log when done. Any other value, including unset, keeps logging off.
 - **Authenticated decryption.** GCM tag verification happens before plaintext is returned, so a tampered carrier or wrong password fails fast without leaking partial decryption output.
 - **Use unique, strong passwords.** Reusing the same password across carriers does not weaken any single payload (each gets its own random salt and nonce), but a compromised password compromises every carrier protected by it. There is no recovery if you forget the password.
 - **Do not paste decrypted plaintext, hex output, or carrier files into bug reports or public issues.** Reproduce with throw-away test data instead — see [SECURITY.md](SECURITY.md).

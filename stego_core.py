@@ -329,8 +329,14 @@ def decrypt_text_input(value: str, password: str) -> tuple[str, str]:
     return format_payload(payload)
 
 
+_TRUTHY_DEBUG_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
 def _debug_logging_enabled() -> bool:
-    return os.environ.get("GREYNOC_DEBUG", "").strip() not in ("", "0", "false", "False")
+    # Whitelist truthy values so unexpected casing (e.g. "FALSE", "OFF") never
+    # silently enables logging — the prior blacklist treated any unknown string
+    # as "on", which was the wrong default for a security-sensitive opt-in.
+    return os.environ.get("GREYNOC_DEBUG", "").strip().lower() in _TRUTHY_DEBUG_VALUES
 
 
 def log_exception() -> None:
