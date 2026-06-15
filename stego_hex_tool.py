@@ -6,6 +6,9 @@ from pathlib import Path
 
 from PIL import Image, UnidentifiedImageError
 
+from stego_constants import MAX_IMAGE_STEGO_RATIO, MAX_PAYLOAD_BYTES, MAX_SOURCE_FILE_BYTES
+from stego_core import atomic_output_path, format_bytes, parse_hex
+
 
 MAGIC = b"GNOCSTEG1"
 HEADER_SIZE = len(MAGIC) + 4
@@ -14,6 +17,31 @@ MAX_IMAGE_PIXELS = 50_000_000
 
 # Bind Pillow's decompression-bomb cap when this script is imported or run directly.
 Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
+
+
+def _validate_source_file(file_path: Path) -> None:
+    if not file_path.is_file():
+        raise ValueError("Source file does not exist or is not a regular file.")
+    file_size = file_path.stat().st_size
+    if file_size > MAX_SOURCE_FILE_BYTES:
+        raise ValueError(
+            f"File is too large ({format_bytes(file_size)}). "
+            f"Limit is {format_bytes(MAX_SOURCE_FILE_BYTES)}."
+        )
+
+
+def _validate_payload_size(payload: bytes) -> None:
+    if len(payload) > MAX_PAYLOAD_BYTES:
+        raise ValueError(
+            f"Payload is too large ({format_bytes(len(payload))}). "
+            f"Limit is {format_bytes(MAX_PAYLOAD_BYTES)}."
+        )
+
+
+def _validate_image_limits(image: Image.Image) -> None:
+    pixels = image.width * image.height
+    if pixels > MAX_IMAGE_PIXELS:
+        raise ValueError(f"Image is too large ({pixels:,} pixels). Limit is {MAX_IMAGE_PIXELS:,} pixels.")
 
 
 def _open_image(path: Path) -> Image.Image:
@@ -73,7 +101,12 @@ def _read_bits(raw: bytes | bytearray, channel_count: int, bit_count: int) -> li
 
 
 def embed_hex(input_path: Path, output_path: Path, hex_string: str) -> None:
-    payload = bytes.fromhex(hex_string)
+    _validate_source_file(input_path)
+    if input_path.resolve() == output_path.resolve():
+        raise ValueError("Choose a new output file so the source image is not overwritten.")
+
+    payload = parse_hex(hex_string)
+    _validate_payload_size(payload)
     packet = (
         MAGIC
         + len(payload).to_bytes(4, "big")
@@ -83,11 +116,15 @@ def embed_hex(input_path: Path, output_path: Path, hex_string: str) -> None:
     bits = _bytes_to_bits(packet)
 
     image = _normalise_image(_open_image(input_path))
+    _validate_image_limits(image)
 
     channel_count = len(image.getbands())
     capacity = image.width * image.height * 3
     if len(bits) > capacity:
         raise ValueError(f"Image only has capacity for {capacity} bits, need {len(bits)}")
+    if len(bits) > int(capacity * MAX_IMAGE_STEGO_RATIO):
+        max_payload_bytes = max(0, int(capacity * MAX_IMAGE_STEGO_RATIO) // 8 - HEADER_SIZE - CRC_SIZE)
+        raise ValueError(f"Payload uses too much image capacity. Maximum payload is about {format_bytes(max_payload_bytes)}.")
 
     raw = bytearray(image.tobytes())
     for bit_index, bit in enumerate(bits):
@@ -95,11 +132,14 @@ def embed_hex(input_path: Path, output_path: Path, hex_string: str) -> None:
         raw[raw_index] = (raw[raw_index] & 0xFE) | bit
 
     encoded = Image.frombytes(image.mode, image.size, bytes(raw))
-    encoded.save(output_path, "PNG")
+    with atomic_output_path(output_path) as temp_path:
+        encoded.save(temp_path, "PNG")
 
 
 def extract_hex(input_path: Path) -> tuple[str, str]:
+    _validate_source_file(input_path)
     image = _normalise_image(_open_image(input_path))
+    _validate_image_limits(image)
 
     channel_count = len(image.getbands())
     raw = image.tobytes()
@@ -109,6 +149,8 @@ def extract_hex(input_path: Path) -> tuple[str, str]:
         raise ValueError("No GreyNOC stego payload found")
 
     payload_size = int.from_bytes(header[len(MAGIC) : HEADER_SIZE], "big")
+    if payload_size > MAX_PAYLOAD_BYTES:
+        raise ValueError("Payload is larger than this app allows.")
     packet_size = HEADER_SIZE + payload_size + CRC_SIZE
     packet = _bits_to_bytes(_read_bits(raw, channel_count, packet_size * 8))
 

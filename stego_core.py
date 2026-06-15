@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import base64
 import binascii
+from contextlib import contextmanager
 import hashlib
 import hmac
 import os
+import tempfile
 import traceback
 import zlib
 from pathlib import Path
@@ -48,6 +50,8 @@ def format_bytes(value: int) -> str:
 
 
 def validate_source_file(file_path: Path) -> None:
+    if not file_path.is_file():
+        raise ValueError("Source file does not exist or is not a regular file.")
     file_size = file_path.stat().st_size
     if file_size > MAX_SOURCE_FILE_BYTES:
         raise ValueError(
@@ -64,10 +68,43 @@ def validate_payload_size(payload: bytes) -> None:
         )
 
 
+def validate_payload_file(file_path: Path) -> None:
+    if not file_path.is_file():
+        raise ValueError("Payload file does not exist or is not a regular file.")
+    file_size = file_path.stat().st_size
+    if file_size > MAX_PAYLOAD_BYTES:
+        raise ValueError(
+            f"Payload file is too large ({format_bytes(file_size)}). "
+            f"Limit is {format_bytes(MAX_PAYLOAD_BYTES)}."
+        )
+
+
 def validate_image_limits(image: Image.Image) -> None:
     pixels = image.width * image.height
     if pixels > MAX_IMAGE_PIXELS:
         raise ValueError(f"Image is too large ({pixels:,} pixels). Limit is {MAX_IMAGE_PIXELS:,} pixels.")
+
+
+@contextmanager
+def atomic_output_path(output_path: Path):
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        prefix=".greynoc-",
+        suffix=".tmp",
+        dir=output_path.parent,
+        delete=False,
+    ) as temp_file:
+        temp_path = Path(temp_file.name)
+
+    try:
+        yield temp_path
+        temp_path.replace(output_path)
+    finally:
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
 
 
 def open_image_safely(path: Path) -> Image.Image:

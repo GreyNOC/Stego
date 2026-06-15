@@ -9,8 +9,10 @@ from unittest import mock
 
 from PIL import Image
 
+import greynoc_stego_cli
+import stego_hex_tool
 import stego_core
-from stego_carriers import embed_for_file, extract_from_file, normalized_output_path
+from stego_carriers import embed_for_file, embed_protected_trailer_payload, extract_from_file, normalized_output_path
 from stego_constants import MAX_PAYLOAD_BYTES
 from stego_core import (
     decrypt_text_input,
@@ -80,9 +82,79 @@ class StegoRegressionTests(unittest.TestCase):
             embed_for_file(video, video_output, PAYLOAD, PASSWORD)
             self.assertEqual(extract_from_file(video_output, PASSWORD)[1], PAYLOAD.decode())
 
+    def test_password_trailer_payload_can_be_recovered_from_valid_image(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "source.png"
+            output = root / "source_trailer.png"
+            self.make_source_image(source)
+
+            embed_protected_trailer_payload(source, output, PAYLOAD, PASSWORD)
+
+            hex_value, message, mode = extract_from_file(output, PASSWORD)
+            self.assertEqual(message, PAYLOAD.decode())
+            self.assertEqual(bytes.fromhex(hex_value.replace(" ", "")), PAYLOAD)
+            self.assertEqual(mode, "Password file trailer payload")
+            with self.assertRaises(ValueError) as ctx:
+                extract_from_file(output, "wrong-password")
+            self.assertIn("Password is wrong", str(ctx.exception))
+
+    def test_atomic_trailer_write_preserves_existing_output_on_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            carrier = root / "carrier.pdf"
+            output = root / "carrier_stego.pdf"
+            original_output = b"keep this existing file"
+            carrier.write_bytes(b"%PDF-1.4\n%test\n%%EOF\n")
+            output.write_bytes(original_output)
+
+            with mock.patch("stego_carriers.build_protected_trailer_footer", side_effect=RuntimeError("boom")):
+                with self.assertRaises(RuntimeError):
+                    embed_protected_trailer_payload(carrier, output, PAYLOAD, PASSWORD)
+
+            self.assertEqual(output.read_bytes(), original_output)
+
     def test_payload_size_limit(self) -> None:
         with self.assertRaises(ValueError):
             validate_payload_size(b"x" * (MAX_PAYLOAD_BYTES + 1))
+
+    def test_cli_rejects_oversized_payload_file_before_reading(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload_file = Path(temp_dir) / "payload.bin"
+            with payload_file.open("wb") as file:
+                file.seek(MAX_PAYLOAD_BYTES)
+                file.write(b"x")
+
+            args = mock.Mock(text=None, hex=None, file=payload_file)
+            with self.assertRaises(ValueError) as ctx:
+                greynoc_stego_cli.read_payload(args)
+            self.assertIn("Payload file is too large", str(ctx.exception))
+
+    def test_cli_extract_password_prompt_preserves_noninteractive_blank_default(self) -> None:
+        fake_stdin = mock.Mock()
+        fake_stdin.isatty.return_value = False
+        with mock.patch.object(greynoc_stego_cli.sys, "stdin", fake_stdin), \
+             mock.patch.object(greynoc_stego_cli.getpass, "getpass") as getpass_mock:
+            password = greynoc_stego_cli.password_from_args(
+                None,
+                "Password: ",
+                default_on_noninteractive="",
+            )
+
+        self.assertEqual(password, "")
+        getpass_mock.assert_not_called()
+
+        fake_stdin.isatty.return_value = True
+        with mock.patch.object(greynoc_stego_cli.sys, "stdin", fake_stdin), \
+             mock.patch.object(greynoc_stego_cli.getpass, "getpass", return_value=PASSWORD) as getpass_mock:
+            password = greynoc_stego_cli.password_from_args(
+                None,
+                "Password: ",
+                default_on_noninteractive="",
+            )
+
+        self.assertEqual(password, PASSWORD)
+        getpass_mock.assert_called_once_with("Password: ")
 
     def test_text_decryption_engine_round_trips_and_rejects_wrong_password(self) -> None:
         encrypted_text = encrypt_payload_to_text(PAYLOAD, PASSWORD)
@@ -196,6 +268,31 @@ class StegoRegressionTests(unittest.TestCase):
             # Original still intact (no partial write)
             with Image.open(source) as image:
                 self.assertEqual(image.size, (96, 96))
+
+    def test_legacy_hex_tool_rejects_input_equals_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "source.png"
+            self.make_source_image(source)
+
+            with self.assertRaises(ValueError) as ctx:
+                stego_hex_tool.embed_hex(source, source, PAYLOAD.hex())
+            self.assertIn("overwritten", str(ctx.exception))
+
+            with Image.open(source) as image:
+                self.assertEqual(image.size, (96, 96))
+
+    def test_legacy_hex_tool_round_trip_still_works(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "source.png"
+            output = root / "encoded.png"
+            self.make_source_image(source)
+
+            stego_hex_tool.embed_hex(source, output, PAYLOAD.hex())
+
+            hex_value, message = stego_hex_tool.extract_hex(output)
+            self.assertEqual(bytes.fromhex(hex_value.replace(" ", "")), PAYLOAD)
+            self.assertEqual(message, PAYLOAD.decode())
 
     def test_debug_logging_off_for_uppercase_false(self) -> None:
         """Regression: GREYNOC_DEBUG=FALSE previously enabled logging due to blacklist logic."""

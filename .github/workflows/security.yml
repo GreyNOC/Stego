@@ -36,8 +36,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Install pip-audit
-        run: pip install pip-audit==2.7.3
+      - name: Install development security tooling
+        run: pip install -r requirements-dev.txt
 
       - name: pip-audit (fail on vulnerable packages)
         run: pip-audit --strict --progress-spinner off

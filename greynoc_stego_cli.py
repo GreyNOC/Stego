@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from stego_carriers import embed_for_file, extract_from_file, suggested_output_path
-from stego_core import decrypt_text_input, encrypt_payload_to_text, parse_hex
+from stego_core import decrypt_text_input, encrypt_payload_to_text, parse_hex, validate_payload_file
 
 
 def read_payload(args: argparse.Namespace) -> bytes:
@@ -18,12 +18,20 @@ def read_payload(args: argparse.Namespace) -> bytes:
         return args.text.encode("utf-8")
     if args.hex is not None:
         return parse_hex(args.hex)
+    validate_payload_file(args.file)
     return args.file.read_bytes()
 
 
-def password_from_args(value: str | None, prompt: str) -> str:
+def password_from_args(
+    value: str | None,
+    prompt: str,
+    *,
+    default_on_noninteractive: str | None = None,
+) -> str:
     if value is not None:
         return value
+    if default_on_noninteractive is not None and not sys.stdin.isatty():
+        return default_on_noninteractive
     return getpass.getpass(prompt)
 
 
@@ -38,7 +46,11 @@ def cmd_inject(args: argparse.Namespace) -> int:
 
 
 def cmd_extract(args: argparse.Namespace) -> int:
-    password = args.password or ""
+    password = password_from_args(
+        args.password,
+        "Password, blank for legacy unprotected payload: ",
+        default_on_noninteractive="",
+    )
     hex_value, text_value, mode = extract_from_file(args.input, password)
     print(f"Mode: {mode}")
     if args.format in {"text", "both"}:
@@ -109,7 +121,7 @@ def build_parser() -> argparse.ArgumentParser:
     extract_parser.add_argument("input", type=Path, help="Encoded carrier file.")
     extract_parser.add_argument(
         "--password",
-        help="Password for protected payloads. Omit to be prompted interactively.",
+        help="Password for protected payloads. Omit to be prompted interactively; noninteractive runs default to blank.",
     )
     extract_parser.add_argument("--format", choices=("text", "hex", "both"), default="both")
     extract_parser.set_defaults(func=cmd_extract)

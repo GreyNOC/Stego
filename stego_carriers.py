@@ -25,6 +25,7 @@ from stego_constants import (
     VIDEO_EXTS,
 )
 from stego_core import (
+    atomic_output_path,
     bits_to_bytes,
     build_legacy_image_packet,
     build_protected_image_header,
@@ -269,8 +270,8 @@ def embed_legacy_image_payload(input_path: Path, output_path: Path, payload: byt
         raw[raw_index] = (raw[raw_index] & 0xFE) | bit
 
     encoded = Image.frombytes(image.mode, image.size, bytes(raw))
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    encoded.save(output_path, "PNG", optimize=True)
+    with atomic_output_path(output_path) as temp_path:
+        encoded.save(temp_path, "PNG", optimize=True)
 
 
 def embed_protected_image_payload(
@@ -323,8 +324,8 @@ def embed_protected_image_payload(
     write_bits_at_positions(raw, channel_count, encrypted_positions, encrypted_bits)
 
     encoded = Image.frombytes(image.mode, image.size, bytes(raw))
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    encoded.save(output_path, "PNG", optimize=True)
+    with atomic_output_path(output_path) as temp_path:
+        encoded.save(temp_path, "PNG", optimize=True)
 
 
 def embed_legacy_trailer_payload(input_path: Path, output_path: Path, payload: bytes) -> None:
@@ -333,17 +334,17 @@ def embed_legacy_trailer_payload(input_path: Path, output_path: Path, payload: b
     if input_path.resolve() == output_path.resolve():
         raise ValueError("Choose a new output file so the source is not overwritten.")
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with input_path.open("rb") as source, output_path.open("wb") as target:
-        while True:
-            chunk = source.read(1024 * 1024)
-            if not chunk:
-                break
-            target.write(chunk)
-        target.write(payload)
-        target.write(zlib.crc32(payload).to_bytes(CRC_SIZE, "big"))
-        target.write(len(payload).to_bytes(TRAILER_LENGTH_SIZE, "big"))
-        target.write(LEGACY_TRAILER_MAGIC)
+    with atomic_output_path(output_path) as temp_path:
+        with input_path.open("rb") as source, temp_path.open("wb") as target:
+            while True:
+                chunk = source.read(1024 * 1024)
+                if not chunk:
+                    break
+                target.write(chunk)
+            target.write(payload)
+            target.write(zlib.crc32(payload).to_bytes(CRC_SIZE, "big"))
+            target.write(len(payload).to_bytes(TRAILER_LENGTH_SIZE, "big"))
+            target.write(LEGACY_TRAILER_MAGIC)
 
 
 def embed_protected_trailer_payload(
@@ -359,23 +360,34 @@ def embed_protected_trailer_payload(
 
     salt, nonce, encrypted_payload = encrypt_payload(payload, password)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with input_path.open("rb") as source, output_path.open("wb") as target:
-        while True:
-            chunk = source.read(1024 * 1024)
-            if not chunk:
-                break
-            target.write(chunk)
-        target.write(encrypted_payload)
-        target.write(build_protected_trailer_footer(salt, nonce, len(encrypted_payload), PROTECTED_TRAILER_MAGIC))
+    with atomic_output_path(output_path) as temp_path:
+        with input_path.open("rb") as source, temp_path.open("wb") as target:
+            while True:
+                chunk = source.read(1024 * 1024)
+                if not chunk:
+                    break
+                target.write(chunk)
+            target.write(encrypted_payload)
+            target.write(build_protected_trailer_footer(salt, nonce, len(encrypted_payload), PROTECTED_TRAILER_MAGIC))
 
 
 def extract_from_file(file_path: Path, password: str = "") -> tuple[str, str, str]:
     validate_source_file(file_path)
     if can_open_as_image(file_path):
         if password:
-            hex_value, message = extract_protected_image_payload(file_path, password)
-            return hex_value, message, "Password image payload"
+            try:
+                hex_value, message = extract_protected_image_payload(file_path, password)
+                return hex_value, message, "Password image payload"
+            except ValueError as image_error:
+                if "No password-protected GreyNOC image payload was found" not in str(image_error):
+                    raise
+                try:
+                    hex_value, message = extract_protected_trailer_payload(file_path, password)
+                    return hex_value, message, "Password file trailer payload"
+                except ValueError as trailer_error:
+                    if "No password-protected GreyNOC file payload was found" not in str(trailer_error):
+                        raise
+                    raise image_error
 
         try:
             hex_value, message = extract_legacy_image_payload(file_path)
